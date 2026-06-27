@@ -1,41 +1,62 @@
 import { createApp } from './app';
 import env from './env';
-import prisma from '../infrastructure/prisma/client';
-import bcrypt from 'bcryptjs';
+import logger from './logger';
+import { seedDatabase } from '../core/utils/seed';
 
+/**
+ * Bootstrap and start the HTTP server.
+ *
+ * Responsibilities:
+ *  1. Build the Fastify app (register plugins, routes, hooks)
+ *  2. Run idempotent database seeding
+ *  3. Listen on the configured host/port
+ *  4. Register SIGTERM/SIGINT handlers for graceful shutdown
+ */
 export const startServer = async (): Promise<void> => {
-  try {
-    const app = await createApp();
+  const app = await createApp();
 
-    // Database check and seeding
-    await prisma.$connect();
-    console.log('📚 Database connected successfully for seeding check');
+  // Run database seeding (idempotent — safe on every startup)
+  await seedDatabase();
 
-    const adminEmail = env.SYSTEM_EMAIL;
-    const adminPassword = await bcrypt.hash(env.SYSTEM_PASSWORD, 10);
+  const port = env.PORT;
+  const host = '0.0.0.0';
 
-    await prisma.user.upsert({
-      where: { email: adminEmail },
-      update: {},
-      create: {
-        email: adminEmail,
-        name: env.SYSTEM_USERNAME,
-        username: env.SYSTEM_USERNAME,
-        password: adminPassword,
-        type: 'admin',
-      },
-    });
+  await app.listen({ port, host });
 
-    console.log(`👤 System Admin User verified/created (${adminEmail})`);
+  logger.info(`🚀 Server listening on ${env.APP_URL}`);
+  logger.info(`📝 Swagger docs: ${env.APP_URL}/api/docs`);
 
-    const port = env.PORT;
-    await app.listen({ port, host: '0.0.0.0' });
-    console.log(`🚀 Server listening on ${env.APP_URL}`);
-    console.log(`📝 Swagger Docs available at ${env.APP_URL}/api/docs`);
-  } catch (error) {
-    console.error('❌ Error starting server:', error);
+  // ---------------------------------------------------------------------------
+  // Graceful Shutdown
+  // Fastify's `close()` triggers the `onClose` hooks which cleanly disconnect
+  // Prisma, Redis, and Socket.io before the process exits.
+  // ---------------------------------------------------------------------------
+
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.info(`Received ${signal}. Starting graceful shutdown...`);
+    try {
+      await app.close();
+      logger.info('Server shut down gracefully. Goodbye! 👋');
+      process.exit(0);
+    } catch (err) {
+      logger.error({ err }, 'Error during shutdown');
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Catch unhandled promise rejections to prevent silent failures
+  process.on('unhandledRejection', (reason) => {
+    logger.error({ reason }, 'Unhandled promise rejection');
     process.exit(1);
-  }
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error({ err }, 'Uncaught exception');
+    process.exit(1);
+  });
 };
 
 export default startServer;

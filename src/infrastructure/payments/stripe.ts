@@ -1,11 +1,32 @@
 import Stripe from 'stripe';
 import env from '../../app/env';
+import logger from '../../app/logger';
 
-const stripeSecretKey = env.STRIPE_SECRET_KEY || '';
+// ---------------------------------------------------------------------------
+// Stripe client initialisation
+// ---------------------------------------------------------------------------
 
-export const stripe = new Stripe(stripeSecretKey, {
-  apiVersion: '2026-05-27.dahlia', // using a stable modern apiVersion
+if (!env.STRIPE_SECRET_KEY) {
+  logger.warn(
+    '⚠️  STRIPE_SECRET_KEY is not set. Stripe features will not function.',
+  );
+}
+
+/**
+ * Stripe SDK client.
+ *
+ * Initialised with an empty string if the secret key is missing so the module
+ * can be imported without crashing — operations will fail at runtime with a
+ * clear Stripe authentication error.
+ */
+export const stripe = new Stripe(env.STRIPE_SECRET_KEY ?? '', {
+  apiVersion: '2026-05-27.dahlia',
+  typescript: true,
 });
+
+// ---------------------------------------------------------------------------
+// StripePaymentService
+// ---------------------------------------------------------------------------
 
 export class StripePaymentService {
   async createPaymentMethod(
@@ -29,18 +50,15 @@ export class StripePaymentService {
     name: string,
     email: string,
   ): Promise<Stripe.Customer> {
-    const customer = await stripe.customers.create({
+    return stripe.customers.create({
       name,
       email,
-      metadata: {
-        user_id: userId,
-      },
-      description: 'New Customer',
-    });
-    return customer as Stripe.Customer;
+      metadata: { user_id: userId },
+      description: 'Customer created via API',
+    }) as Promise<Stripe.Customer>;
   }
 
-  async attachCustomerPaymentMethodId(
+  async attachPaymentMethodToCustomer(
     customerId: string,
     paymentMethodId: string,
   ): Promise<Stripe.PaymentMethod> {
@@ -49,16 +67,13 @@ export class StripePaymentService {
     });
   }
 
-  async setCustomerDefaultPaymentMethodId(
+  async setDefaultPaymentMethod(
     customerId: string,
     paymentMethodId: string,
   ): Promise<Stripe.Customer> {
-    const customer = await stripe.customers.update(customerId, {
-      invoice_settings: {
-        default_payment_method: paymentMethodId,
-      },
-    });
-    return customer as Stripe.Customer;
+    return stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    }) as Promise<Stripe.Customer>;
   }
 
   async updateCustomer(
@@ -66,25 +81,25 @@ export class StripePaymentService {
     name: string,
     email: string,
   ): Promise<Stripe.Customer> {
-    const customer = await stripe.customers.update(customerId, {
+    return stripe.customers.update(customerId, {
       name,
       email,
-    });
-    return customer as Stripe.Customer;
+    }) as Promise<Stripe.Customer>;
   }
 
-  async getCustomerByID(
+  async getCustomer(
     id: string,
   ): Promise<Stripe.Customer | Stripe.DeletedCustomer> {
     return stripe.customers.retrieve(id);
   }
 
-  async createBillingSession(
+  async createBillingPortalSession(
     customerId: string,
+    returnUrl = env.APP_URL,
   ): Promise<Stripe.BillingPortal.Session> {
     return stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: env.APP_URL,
+      return_url: returnUrl,
     });
   }
 
@@ -95,92 +110,43 @@ export class StripePaymentService {
     metadata?: Stripe.MetadataParam,
   ): Promise<Stripe.PaymentIntent> {
     return stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // amount in cents
+      amount: Math.round(amount * 100), // Convert to smallest currency unit
       currency,
       customer: customerId,
-      metadata,
+      ...(metadata && { metadata }),
     });
   }
 
-  async createCheckoutSession(): Promise<Stripe.Checkout.Session> {
-    const successUrl = `${env.APP_URL}/success?session_id={CHECKOUT_SESSION_ID}`;
-    const cancelUrl = `${env.APP_URL}/failed`;
-
+  async createCheckoutSession(
+    lineItems: Stripe.Checkout.SessionCreateParams.LineItem[],
+    successUrl = `${env.APP_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancelUrl = `${env.APP_URL}/payment/cancelled`,
+  ): Promise<Stripe.Checkout.Session> {
     return stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: 'Sample Product',
-            },
-            unit_amount: 2000, // $20.00
-          },
-          quantity: 1,
-        },
-      ],
+      line_items: lineItems,
       success_url: successUrl,
       cancel_url: cancelUrl,
     });
   }
 
-  async createCheckoutSessionSubscription(
+  async createSubscriptionCheckout(
     customerId: string,
     priceId: string,
+    trialDays = 14,
+    successUrl = `${env.APP_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancelUrl = `${env.APP_URL}/payment/cancelled`,
   ): Promise<Stripe.Checkout.Session> {
-    const successUrl = `${env.APP_URL}/success?session_id={CHECKOUT_SESSION_ID}`;
-    const cancelUrl = `${env.APP_URL}/failed`;
-
     return stripe.checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
       customer: customerId,
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      subscription_data: {
-        trial_period_days: 14,
-      },
+      line_items: [{ price: priceId, quantity: 1 }],
+      subscription_data: { trial_period_days: trialDays },
       success_url: successUrl,
       cancel_url: cancelUrl,
     });
-  }
-
-  async calculateTax(
-    amount: number,
-    currency: string,
-    customerDetails: Stripe.Tax.CalculationCreateParams.CustomerDetails,
-  ): Promise<Stripe.Tax.Calculation> {
-    return stripe.tax.calculations.create({
-      currency,
-      customer_details: customerDetails,
-      line_items: [
-        {
-          amount: Math.round(amount * 100),
-          tax_behavior: 'exclusive',
-          reference: 'tax_calculation',
-        },
-      ],
-    });
-  }
-
-  async createTaxTransaction(
-    taxCalculationId: string,
-  ): Promise<Stripe.Tax.Transaction> {
-    return stripe.tax.transactions.createFromCalculation({
-      calculation: taxCalculationId,
-      reference: 'tax_transaction',
-    });
-  }
-
-  async downloadInvoiceUrl(paymentIntentId: string): Promise<string | null> {
-    const invoice = await stripe.invoices.retrieve(paymentIntentId);
-    return invoice.hosted_invoice_url || null;
   }
 
   async createConnectedAccount(email: string): Promise<Stripe.Account> {
@@ -188,17 +154,11 @@ export class StripePaymentService {
       type: 'express',
       email,
       country: 'US',
-      capabilities: {
-        transfers: {
-          requested: true,
-        },
-      },
+      capabilities: { transfers: { requested: true } },
     });
   }
 
-  async createOnboardingAccountLink(
-    accountId: string,
-  ): Promise<Stripe.AccountLink> {
+  async createAccountOnboardingLink(accountId: string): Promise<Stripe.AccountLink> {
     return stripe.accountLinks.create({
       account: accountId,
       refresh_url: env.APP_URL,
@@ -208,14 +168,14 @@ export class StripePaymentService {
   }
 
   async createTransfer(
-    accountId: string,
+    destinationAccountId: string,
     amount: number,
     currency: string,
   ): Promise<Stripe.Transfer> {
     return stripe.transfers.create({
       amount: Math.round(amount * 100),
       currency,
-      destination: accountId,
+      destination: destinationAccountId,
     });
   }
 
@@ -225,40 +185,26 @@ export class StripePaymentService {
     currency: string,
   ): Promise<Stripe.Payout> {
     return stripe.payouts.create(
-      {
-        amount: Math.round(amount * 100),
-        currency,
-      },
-      {
-        stripeAccount: accountId,
-      },
+      { amount: Math.round(amount * 100), currency },
+      { stripeAccount: accountId },
     );
   }
 
-  async checkBalance(accountId: string): Promise<Stripe.Balance> {
-    return stripe.balance.retrieve(
-      {},
-      {
-        stripeAccount: accountId,
-      },
-    );
+  async getBalance(accountId: string): Promise<Stripe.Balance> {
+    return stripe.balance.retrieve({}, { stripeAccount: accountId });
   }
 
-  async createToken(
+  async createBankAccountToken(
     bankAccount: Stripe.TokenCreateParams.BankAccount,
   ): Promise<Stripe.Token> {
-    return stripe.tokens.create({
-      bank_account: bankAccount,
-    });
+    return stripe.tokens.create({ bank_account: bankAccount });
   }
 
-  async createBankAccount(
+  async attachBankAccount(
     customerId: string,
     bankAccountToken: string,
   ): Promise<Stripe.CustomerSource> {
-    return stripe.customers.createSource(customerId, {
-      source: bankAccountToken,
-    });
+    return stripe.customers.createSource(customerId, { source: bankAccountToken });
   }
 
   async verifyBankAccount(
@@ -266,9 +212,7 @@ export class StripePaymentService {
     bankAccountId: string,
     amounts: [number, number],
   ): Promise<Stripe.CustomerSource> {
-    return stripe.customers.verifySource(customerId, bankAccountId, {
-      amounts,
-    });
+    return stripe.customers.verifySource(customerId, bankAccountId, { amounts });
   }
 
   async createACHPaymentIntent(
@@ -281,16 +225,18 @@ export class StripePaymentService {
       customer: customerId,
       payment_method_types: ['us_bank_account'],
       payment_method_options: {
-        us_bank_account: {
-          verification_method: 'automatic',
-        },
+        us_bank_account: { verification_method: 'automatic' },
       },
     });
   }
 
-  handleWebhook(rawBody: string | Buffer, sig: string): Stripe.Event {
-    const webhookSecret = env.STRIPE_WEBHOOK_SECRET || '';
-    return stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+  /**
+   * Validate and parse an incoming Stripe webhook event.
+   * Throws a `Stripe.errors.StripeSignatureVerificationError` on invalid signatures.
+   */
+  constructWebhookEvent(rawBody: string | Buffer, signature: string): Stripe.Event {
+    const secret = env.STRIPE_WEBHOOK_SECRET ?? '';
+    return stripe.webhooks.constructEvent(rawBody, signature, secret);
   }
 }
 

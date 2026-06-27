@@ -2,7 +2,8 @@ import fp from 'fastify-plugin';
 import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { fromNodeHeaders } from 'better-auth/node';
 import auth from '../infrastructure/auth/better-auth';
-import { AuthUserPayload } from '../modules/auth/auth.types';
+import { UnauthorizedError } from '../core/errors/app.error';
+import type { AuthUserPayload } from '../modules/auth/auth.types';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -18,6 +19,7 @@ declare module 'fastify' {
       reply: FastifyReply,
     ) => Promise<void>;
   }
+
   interface FastifyRequest {
     user: AuthUserPayload;
   }
@@ -26,25 +28,20 @@ declare module 'fastify' {
 const jwtPlugin: FastifyPluginAsync = fp(async (fastify) => {
   fastify.decorate(
     'authenticate',
-    async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-      try {
-        const session = await auth.api.getSession({
-          headers: fromNodeHeaders(request.headers),
-        });
+    async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+      const session = await auth.api.getSession({
+        headers: fromNodeHeaders(request.headers),
+      });
 
-        if (!session) {
-          reply.status(401).send({ success: false, message: 'Unauthorized' });
-          return;
-        }
-
-        request.user = {
-          userId: session.user.id,
-          email: session.user.email,
-          type: (session.user as { role?: string }).role ?? 'user',
-        } satisfies AuthUserPayload;
-      } catch {
-        reply.status(401).send({ success: false, message: 'Unauthorized' });
+      if (!session) {
+        throw new UnauthorizedError();
       }
+
+      request.user = {
+        userId: session.user.id,
+        email: session.user.email,
+        type: (session.user as { role?: string }).role ?? 'user',
+      } satisfies AuthUserPayload;
     },
   );
 });

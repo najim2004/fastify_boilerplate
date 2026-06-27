@@ -1,11 +1,23 @@
 import { Queue } from 'bullmq';
-import env from '../../app/env';
+import { redisConnectionOptions } from '../redis/redis';
+import { QUEUE_NAMES } from '../../core/constants';
 
-export const notificationQueue = new Queue('notification-queue', {
-  connection: {
-    host: env.REDIS_HOST,
-    port: env.REDIS_PORT,
-    password: env.REDIS_PASSWORD || undefined,
+/**
+ * BullMQ queue for in-app notifications.
+ *
+ * Add jobs via `notificationQueue.add(jobName, data)`.
+ * Processed by future `src/infrastructure/workers/notification.worker.ts`.
+ */
+export const notificationQueue = new Queue(QUEUE_NAMES.NOTIFICATION, {
+  connection: redisConnectionOptions,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 2000,
+    },
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 50 },
   },
 });
 

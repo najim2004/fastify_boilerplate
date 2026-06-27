@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
+import sensible from '@fastify/sensible';
 
 import prismaPlugin from '../plugins/prisma.plugin';
 import redisPlugin from '../plugins/redis.plugin';
@@ -13,19 +14,56 @@ import stripePlugin from '../plugins/stripe.plugin';
 
 import registerRoutes from './register';
 import errorMiddleware from '../middlewares/error.middleware';
+import logger from './logger';
+import env from './env';
 
 export const createApp = async (): Promise<FastifyInstance> => {
   const app = fastify({
-    logger: true,
+    // Use the application-level pino logger (includes redaction + formatting)
+    logger,
+    // Attach a unique request ID to every log line for traceability
+    genReqId: () => crypto.randomUUID(),
+    requestIdHeader: 'x-request-id',
+    requestIdLogLabel: 'requestId',
+    trustProxy: env.NODE_ENV === 'production',
   });
 
-  // Global Middlewares/Plugins
-  await app.register(cors);
-  await app.register(helmet, { contentSecurityPolicy: false }); // Disable CSP to support Swagger UI rendering
-  await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
-  await app.register(multipart, { attachFieldsToBody: true }); // Automatically parse form bodies
+  // ---------------------------------------------------------------------------
+  // Security & Utility Plugins
+  // ---------------------------------------------------------------------------
 
-  // Register Custom Plugins
+  await app.register(helmet, {
+    // Disabled to allow Swagger UI to render inline scripts/styles
+    contentSecurityPolicy: false,
+  });
+
+  await app.register(cors, {
+    origin: env.CLIENT_APP_URL,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  });
+
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: '1 minute',
+    // Return standard rate-limit headers
+    addHeaders: {
+      'x-ratelimit-limit': true,
+      'x-ratelimit-remaining': true,
+      'x-ratelimit-reset': true,
+    },
+  });
+
+  // Provides `reply.notFound()`, `reply.badRequest()`, etc.
+  await app.register(sensible);
+
+  // Automatically parse multipart/form-data bodies
+  await app.register(multipart, { attachFieldsToBody: true });
+
+  // ---------------------------------------------------------------------------
+  // Infrastructure Plugins (decorate `fastify.prisma`, `fastify.redis`, etc.)
+  // ---------------------------------------------------------------------------
+
   await app.register(prismaPlugin);
   await app.register(redisPlugin);
   await app.register(jwtPlugin);
@@ -33,10 +71,16 @@ export const createApp = async (): Promise<FastifyInstance> => {
   await app.register(socketPlugin);
   await app.register(stripePlugin);
 
-  // Register Routes
+  // ---------------------------------------------------------------------------
+  // Routes
+  // ---------------------------------------------------------------------------
+
   await registerRoutes(app);
 
+  // ---------------------------------------------------------------------------
   // Global Error Handler
+  // ---------------------------------------------------------------------------
+
   app.setErrorHandler(errorMiddleware);
 
   return app;

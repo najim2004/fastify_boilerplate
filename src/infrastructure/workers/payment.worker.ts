@@ -1,37 +1,75 @@
 import { Worker, Job } from 'bullmq';
-import env from '../../app/env';
+import { redisConnectionOptions } from '../redis/redis';
+import { QUEUE_NAMES } from '../../core/constants';
+import logger from '../../app/logger';
 
-interface PaymentJobData {
+// ---------------------------------------------------------------------------
+// Job data interface
+// ---------------------------------------------------------------------------
+
+export interface PaymentJobData {
   userId: string;
   amount: number;
   currency: string;
   transactionId: string;
+  provider: 'stripe' | 'paypal';
+  metadata?: Record<string, string>;
 }
 
+// ---------------------------------------------------------------------------
+// Worker
+// ---------------------------------------------------------------------------
+
+/**
+ * Processes jobs from the payment queue.
+ *
+ * Handles post-payment tasks such as:
+ *   - Updating the `PaymentTransaction` record status in the database
+ *   - Triggering email receipts
+ *   - Notifying downstream services
+ *
+ * The actual charge is initiated via the payments API endpoint;
+ * this worker handles async follow-up processing.
+ */
 export const paymentWorker = new Worker<PaymentJobData>(
-  'payment-queue',
+  QUEUE_NAMES.PAYMENT,
   async (job: Job<PaymentJobData>) => {
-    console.log(
-      `💳 Processing payment job ${job.id} for user ${job.data.userId}`,
+    const { userId, amount, currency, transactionId, provider } = job.data;
+
+    logger.info(
+      { jobId: job.id, userId, transactionId, provider },
+      '💳 Processing payment job',
     );
-    try {
-      const { userId, amount, currency, transactionId } = job.data;
-      // Here you would integrate with Stripe or another processor
-      console.log(
-        `✅ Payment processed: ${amount} ${currency} for user ${userId} on TX ${transactionId}`,
-      );
-    } catch (error) {
-      console.error(`❌ Failed to process payment for job ${job.id}:`, error);
-      throw error;
-    }
+
+    // TODO: Implement payment post-processing logic here, e.g.:
+    //   await prisma.paymentTransaction.update({ where: { id: transactionId }, data: { status: 'completed' } });
+    //   await emailQueue.add('sendPaymentReceipt', { userId, amount, currency });
+
+    logger.info(
+      { jobId: job.id, transactionId, amount: `${amount} ${currency}` },
+      '✅ Payment job processed',
+    );
   },
   {
-    connection: {
-      host: env.REDIS_HOST,
-      port: env.REDIS_PORT,
-      password: env.REDIS_PASSWORD || undefined,
-    },
+    connection: redisConnectionOptions,
+    concurrency: 2, // Limit concurrent payment processing
   },
 );
+
+// ---------------------------------------------------------------------------
+// Worker event handlers
+// ---------------------------------------------------------------------------
+
+paymentWorker.on('completed', (job) => {
+  logger.debug({ jobId: job.id }, '🟢 Payment job completed');
+});
+
+paymentWorker.on('failed', (job, err) => {
+  logger.error({ jobId: job?.id, err }, '🔴 Payment job failed');
+});
+
+paymentWorker.on('error', (err) => {
+  logger.error({ err }, 'Payment worker encountered an error');
+});
 
 export default paymentWorker;

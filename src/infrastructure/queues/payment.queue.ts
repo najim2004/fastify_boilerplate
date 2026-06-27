@@ -1,11 +1,23 @@
 import { Queue } from 'bullmq';
-import env from '../../app/env';
+import { redisConnectionOptions } from '../redis/redis';
+import { QUEUE_NAMES } from '../../core/constants';
 
-export const paymentQueue = new Queue('payment-queue', {
-  connection: {
-    host: env.REDIS_HOST,
-    port: env.REDIS_PORT,
-    password: env.REDIS_PASSWORD || undefined,
+/**
+ * BullMQ queue for payment processing jobs.
+ *
+ * Add jobs via `paymentQueue.add(jobName, data)`.
+ * Processed by `src/infrastructure/workers/payment.worker.ts`.
+ */
+export const paymentQueue = new Queue(QUEUE_NAMES.PAYMENT, {
+  connection: redisConnectionOptions,
+  defaultJobOptions: {
+    attempts: 5, // Payment jobs get more retries
+    backoff: {
+      type: 'exponential',
+      delay: 10000,
+    },
+    removeOnComplete: { count: 200 },
+    removeOnFail: { count: 100 },
   },
 });
 

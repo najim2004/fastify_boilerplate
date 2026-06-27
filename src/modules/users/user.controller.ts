@@ -1,39 +1,36 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import userService from './user.service';
-import { AuthUserPayload } from '../auth/auth.types';
+import { successResponse } from '../../core/utils/response';
+import { NotFoundError } from '../../core/errors/app.error';
+import type { UpdateUserDto } from './user.schema';
 
 export class UserController {
+  /**
+   * GET /api/users
+   * Returns the authenticated user's profile.
+   */
   async getUser(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    try {
-      const userPayload = request.user as AuthUserPayload;
-      const user = await userService.getUser(userPayload.userId);
-      if (!user) {
-        reply.status(404).send({ success: false, message: 'User not found' });
-        return;
-      }
-      reply.send({ success: true, user });
-    } catch (error) {
-      const err = error as Error;
-      reply.status(400).send({ success: false, message: err.message });
+    const { userId } = request.user;
+    const user = await userService.getUser(userId);
+
+    if (!user) {
+      throw new NotFoundError('User not found');
     }
+
+    reply.send(successResponse(user));
   }
 
+  /**
+   * PATCH /api/users
+   * Updates the authenticated user's profile.
+   */
   async updateUser(
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> {
-    try {
-      const userPayload = request.user as AuthUserPayload;
-      const body = request.body as Record<string, string>;
-      const updatedUser = await userService.updateUser(
-        userPayload.userId,
-        body,
-      );
-      reply.send({ success: true, user: updatedUser });
-    } catch (error) {
-      const err = error as Error;
-      reply.status(400).send({ success: false, message: err.message });
-    }
+    const { userId } = request.user;
+    const updatedUser = await userService.updateUser(userId, request.body as UpdateUserDto);
+    reply.send(successResponse(updatedUser, 'Profile updated successfully'));
   }
 }
 
