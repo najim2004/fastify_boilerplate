@@ -1,4 +1,4 @@
-import fastify, { FastifyInstance } from 'fastify';
+import fastify, { FastifyInstance, FastifyBaseLogger } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -20,13 +20,13 @@ import env from './env';
 export const createApp = async (): Promise<FastifyInstance> => {
   const app = fastify({
     // Use the application-level pino logger (includes redaction + formatting)
-    logger,
+    loggerInstance: logger as unknown as FastifyBaseLogger,
     // Attach a unique request ID to every log line for traceability
     genReqId: () => crypto.randomUUID(),
     requestIdHeader: 'x-request-id',
     requestIdLogLabel: 'requestId',
     trustProxy: env.NODE_ENV === 'production',
-  });
+  }) as unknown as FastifyInstance;
 
   // ---------------------------------------------------------------------------
   // Security & Utility Plugins

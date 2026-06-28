@@ -4,11 +4,11 @@
   "description": "Production-ready Fastify TypeScript boilerplate with Better Auth, Prisma, BullMQ, Socket.io, and Stripe.",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "concurrently -k -p \"[{name}]\" -n \"TypeScript,App\" -c \"yellow.bold,cyan.bold\" \"pnpm watch:ts\" \"pnpm dev:start\"",
-    "dev:start": "node --watch dist/index.js",
+    "start": "pnpm run build:ts && node dist/src/index.js",
+    "build:ts": "tsc",
     "watch:ts": "tsc -w",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "pnpm run build:ts && concurrently -k -p \"[{name}]\" -n \"TypeScript,App\" -c \"yellow.bold,cyan.bold\" \"pnpm:watch:ts\" \"pnpm:dev:start\"",
+    "dev:start": "node --watch dist/src/index.js",
     "type-check": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\"",
@@ -17,7 +17,12 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio"
   },
-  "keywords": ["fastify", "typescript", "boilerplate", "rest-api"],
+  "keywords": [
+    "fastify",
+    "typescript",
+    "boilerplate",
+    "rest-api"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
